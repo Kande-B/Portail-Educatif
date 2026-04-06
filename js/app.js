@@ -1,6 +1,6 @@
 /**
  * PORTAIL ÉDUCATIF M. KANDÉ
- * Logicielle : Synchronisation dynamique via API GitHub
+ * Version Automatisée avec Heuristiques de Détection
  */
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -11,7 +11,7 @@ document.addEventListener('DOMContentLoaded', () => {
 class PortailEducatif {
   constructor() {
     this.repos = [];
-    this.categories = []; // Données structurées pour le rendu
+    this.categories = [];
     this.currentFilter = 'all';
     this.searchQuery = '';
     this.isLoading = true;
@@ -28,40 +28,42 @@ class PortailEducatif {
     this.initScrollEffects();
   }
 
-  // ============================================
-  // FETCH DATA
-  // ============================================
   async fetchUserRepos() {
     try {
       const response = await fetch(`https://api.github.com/users/${CONFIG.githubUser}/repos?sort=updated&per_page=100`);
       if (!response.ok) throw new Error('API Rate Limit or Error');
       const data = await response.json();
 
-      // Filtrer le dépôt du portail lui-même et ceux sans GitHub Pages (optionnel)
       this.repos = data.filter(repo =>
         repo.name.toLowerCase() !== 'm.kande' &&
         repo.name.toLowerCase() !== 'portail-educatif' &&
+        repo.name.toLowerCase() !== 'kande-b.github.io' &&
         repo.has_pages === true
       );
     } catch (error) {
       console.error('Erreur API:', error);
-      this.repos = []; // Fallback ou message d'erreur
+      this.repos = [];
     } finally {
       this.isLoading = false;
     }
   }
 
   // ============================================
-  // PROCESS DATA (Classification Intelligente)
+  // HEURISTIQUES DE DÉTECTION
   // ============================================
   processData() {
     const categoriesMap = new Map();
 
     this.repos.forEach(repo => {
       const topics = repo.topics || [];
+      const name = repo.name.toLowerCase();
+      const desc = (repo.description || "").toLowerCase();
+      const fullText = `${name} ${desc}`;
 
-      // 1. Déterminer la matière (via topic ou par défaut)
+      // 1. DÉTECTION DE LA MATIÈRE (Sujet)
       let subjectId = 'autres';
+
+      // Priorité 1 : Topics explicites
       for (const [id, cfg] of Object.entries(SUBJECTS_CONFIG)) {
         if (topics.includes(id)) {
           subjectId = id;
@@ -69,8 +71,25 @@ class PortailEducatif {
         }
       }
 
-      // 2. Déterminer le niveau (via topic ou préfixe)
+      // Priorité 2 : Mots-clés dans le nom ou la description (Heuristiques)
+      if (subjectId === 'autres') {
+        const keywordsMaths = ['maths', 'fonctions', 'polynome', 'suite', 'stats', 'statistique', 'geometrie', 'algebre', 'ln', 'expo', 'derivee'];
+        const keywordsSciences = ['science', 'chimie', 'physique', 'electro', 'signal', 'sonore', 'moteur', 'optique', 'atome', 'oxydo'];
+        const keywordsInformatique = ['informatique', 'cloud', 'digital', 'py', 'js', 'html', 'code'];
+        const keywordsAstronomie = ['planete', 'kepler', 'etoile', 'astronomie', 'soleil'];
+        const keywordsSport = ['joj', 'dakar', 'sport', 'olympique'];
+
+        if (keywordsMaths.some(k => fullText.includes(k))) subjectId = 'maths';
+        else if (keywordsSciences.some(k => fullText.includes(k))) subjectId = 'sciences';
+        else if (keywordsInformatique.some(k => fullText.includes(k))) subjectId = 'informatique';
+        else if (keywordsAstronomie.some(k => fullText.includes(k))) subjectId = 'astronomie';
+        else if (keywordsSport.some(k => fullText.includes(k))) subjectId = 'sport';
+      }
+
+      // 2. DÉTECTION DU NIVEAU
       let level = 'Tous niveaux';
+
+      // Priorité 1 : Topics
       const levelTopics = ['3eme', 'cap', '2nde', '1ere', 'terminale', 'bacpro'];
       const foundLevelTopic = topics.find(t => levelTopics.includes(t));
 
@@ -78,39 +97,40 @@ class PortailEducatif {
         const labels = { '3eme': '3ème PM', 'cap': 'CAP', '2nde': '2nde Bac Pro', '1ere': '1ère S', 'terminale': 'Terminale', 'bacpro': 'Bac Pro' };
         level = labels[foundLevelTopic] || foundLevelTopic;
       } else {
-        // Fallback par préfixe
+        // Priorité 2 : Préfixes ou mots-clés
         for (const [prefix, label] of Object.entries(LEVEL_FALLBACKS)) {
-          if (repo.name.toLowerCase().startsWith(prefix)) {
+          if (name.includes(prefix)) {
             level = label;
             break;
           }
         }
+        // Heuristique supplémentaire
+        if (level === 'Tous niveaux') {
+          if (fullText.includes('bac pro')) level = 'Bac Pro';
+          else if (fullText.includes('lycee pro')) level = 'Lycée Pro';
+          else if (fullText.includes('premiere s')) level = '1ère S';
+        }
       }
 
-      // 3. Formater l'objet repo
+      // 3. FORMATAGE
       const repoObj = {
         name: repo.name,
         title: this.formatTitle(repo.name, repo.description),
-        description: repo.description || "Ressource éducative sur GitHub.",
+        description: repo.description || "Exploration et ressources éducatives.",
         level: level,
         subject: SUBJECTS_CONFIG[subjectId].name,
         color: SUBJECTS_CONFIG[subjectId].color,
         icon: SUBJECTS_CONFIG[subjectId].icon,
-        tags: topics.length > 0 ? topics : ['GitHub'],
-        updatedAt: new Date(repo.updated_at).toLocaleDateString()
+        tags: topics.length > 0 ? topics : [subjectId, level.toLowerCase().replace(' ', '')],
+        updatedAt: new Date(repo.updated_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })
       };
 
-      // 4. Ranger dans sa catégorie
       if (!categoriesMap.has(subjectId)) {
-        categoriesMap.set(subjectId, {
-          ...SUBJECTS_CONFIG[subjectId],
-          repos: []
-        });
+        categoriesMap.set(subjectId, { ...SUBJECTS_CONFIG[subjectId], repos: [] });
       }
       categoriesMap.get(subjectId).repos.push(repoObj);
     });
 
-    // Convertir Map en Array trié par priorité
     const priority = ['maths', 'sciences', 'informatique', 'astronomie', 'sport', 'culture', 'autres'];
     this.categories = Array.from(categoriesMap.values()).sort((a, b) => {
       const idxA = priority.indexOf(Object.keys(SUBJECTS_CONFIG).find(k => SUBJECTS_CONFIG[k].name === a.name));
@@ -120,12 +140,13 @@ class PortailEducatif {
   }
 
   formatTitle(name, description) {
-    // Si la description est courte et ressemble à un titre, l'utiliser
-    if (description && description.length < 40 && !description.includes(' ')) return description;
-    // Sinon nettoyer le nom du dépôt
+    if (description && description.length > 5 && description.length < 50 && !description.includes('http')) return description;
     return name
+      .replace(/bacpro/gi, '')
+      .replace(/bac-pro/gi, '')
       .replace(/-/g, ' ')
       .replace(/_/g, ' ')
+      .trim()
       .replace(/\b[a-z]/g, l => l.toUpperCase());
   }
 
@@ -136,17 +157,17 @@ class PortailEducatif {
     document.getElementById('sections-container').innerHTML = `
       <div class="no-results">
         <div class="no-results__icon">⏳</div>
-        <h3 class="no-results__title">Synchronisation avec GitHub...</h3>
-        <p class="no-results__text">Chargement de vos dernières ressources en cours.</p>
+        <h3 class="no-results__title">Synchronisation...</h3>
+        <p class="no-results__text">Connexion à GitHub pour récupérer vos 38 dépôts.</p>
       </div>
     `;
   }
 
   renderStats() {
-    const subjects = new Set(this.repos.map(r => r.language).filter(l => l));
-    document.getElementById('stat-repos').textContent = this.repos.length;
+    const total = this.repos.length;
+    document.getElementById('stat-repos').textContent = total;
     document.getElementById('stat-categories').textContent = this.categories.length;
-    document.getElementById('stat-subjects').textContent = subjects.size || 5;
+    document.getElementById('stat-subjects').textContent = new Set(this.repos.map(r => r.language)).size || 5;
   }
 
   renderFilters() {
@@ -173,11 +194,7 @@ class PortailEducatif {
       const filtered = cat.repos.filter(repo => {
         const matchesFilter = this.currentFilter === 'all' || repo.subject === this.currentFilter;
         const search = this.searchQuery.toLowerCase();
-        const matchesSearch = search === '' ||
-          repo.title.toLowerCase().includes(search) ||
-          repo.description.toLowerCase().includes(search) ||
-          repo.level.toLowerCase().includes(search);
-        return matchesFilter && matchesSearch;
+        return matchesFilter && (search === '' || repo.title.toLowerCase().includes(search) || repo.description.toLowerCase().includes(search));
       });
 
       if (filtered.length === 0) return;
@@ -186,7 +203,7 @@ class PortailEducatif {
       html += `
         <section class="section fade-in" style="animation-delay: ${idx * 0.1}s">
           <div class="section__header">
-            <div class="section__icon" style="background: ${cat.color}15;">${cat.icon}</div>
+            <div class="section__icon" style="background: ${cat.color}15; color: ${cat.color};">${cat.icon}</div>
             <div>
               <h2 class="section__title">${cat.name}</h2>
               <span class="section__count">${filtered.length} ressource${filtered.length > 1 ? 's' : ''}</span>
@@ -210,7 +227,7 @@ class PortailEducatif {
       <article class="repo-card fade-in stagger-${(index % 5) + 1}" onclick="window.open('${pagesUrl}', '_blank')">
         <div class="repo-card__accent" style="background: ${repo.color};"></div>
         <div class="repo-card__header">
-          <div class="repo-card__icon" style="background: ${repo.color}18; color: ${repo.color};">📄</div>
+          <div class="repo-card__icon" style="background: ${repo.color}18; color: ${repo.color};">${repo.icon || '📄'}</div>
           <h3 class="repo-card__title">${repo.title}</h3>
           <span class="repo-card__level">${repo.level}</span>
         </div>
@@ -230,20 +247,10 @@ class PortailEducatif {
   }
 
   renderNoResults() {
-    return `
-      <div class="no-results">
-        <div class="no-results__icon">🔍</div>
-        <h3 class="no-results__title">Aucun dépôt trouvé</h3>
-        <p class="no-results__text">Essayez d'autres mots-clés ou vérifiez votre connexion.</p>
-      </div>
-    `;
+    return `<div class="no-results">🔍 Aucun dépôt trouvé.</div>`;
   }
 
-  // ============================================
-  // EVENTS & UX
-  // ============================================
   bindEvents() {
-    // Filtres
     document.getElementById('filters-row').addEventListener('click', (e) => {
       const chip = e.target.closest('.filter-chip');
       if (!chip) return;
@@ -253,7 +260,6 @@ class PortailEducatif {
       this.renderSections();
     });
 
-    // Recherche
     const searchInput = document.getElementById('search-input');
     if (searchInput) {
       searchInput.addEventListener('input', (e) => {
@@ -261,14 +267,12 @@ class PortailEducatif {
         this.renderSections();
       });
     }
-
-    // Mobile Search... (identique à la version précédente)
   }
 
   initScrollEffects() {
     const navbar = document.getElementById('navbar');
     window.addEventListener('scroll', () => {
-      navbar.classList.toggle('scrolled', window.scrollY > 50);
+      if (navbar) navbar.classList.toggle('scrolled', window.scrollY > 50);
     }, { passive: true });
   }
 }
